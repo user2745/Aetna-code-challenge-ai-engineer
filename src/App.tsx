@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import ChatInput from './components/ChatInput'
 import ChatMessage from './components/ChatMessage'
 import EnrichmentStatus from './components/EnrichmentStatus'
-import type { ChatMessage as ChatMessageModel } from './types'
+import type { ChatMessage as ChatMessageModel, ChatRequest } from './types'
+import { sendChat } from './services/api'
 import './App.css'
 
 const seedMessages: ChatMessageModel[] = [
@@ -27,23 +28,26 @@ function App() {
   const hasMessages = useMemo(() => messages.length > 0, [messages])
 
   const sendToBackend = async (prompt: string, pendingId: string) => {
-    // TODO: replace with real API call. Keep this stub so the UI is wired.
-    // Example: const { message, conversationId } = await postChat({ prompt })
-    await new Promise((resolve) => setTimeout(resolve, 900))
+    const payload: ChatRequest = {
+      message: prompt,
+      conversationId,
+    }
+
+    const { message, conversationId: nextConversationId } = await sendChat(payload)
+
+    setConversationId(nextConversationId)
 
     setMessages((prev) =>
       prev.map((m) =>
         m.id === pendingId
           ? {
-              ...m,
-              content: `Placeholder response for: "${prompt}"`,
+              ...message,
+              id: message.id || pendingId,
               status: 'complete',
             }
           : m
       )
     )
-
-    // setConversationId(nextConversationId)
   }
 
   const handleSend = async (text: string) => {
