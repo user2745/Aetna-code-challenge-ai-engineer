@@ -27,3 +27,4 @@ dist-ssr
 .env
 .env.*
 data/enriched.json
+package-lock.json

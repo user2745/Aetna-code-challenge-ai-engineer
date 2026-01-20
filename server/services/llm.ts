@@ -78,6 +78,57 @@ export async function chatJson<T>(messages: LLMMessage[], options: ChatJsonOptio
 	}
 }
 
+const FORBIDDEN_SQL = [
+	'insert',
+	'update',
+	'delete',
+	'drop',
+	'alter',
+	'create',
+	'replace',
+	'truncate',
+	'attach',
+	'detach',
+	'pragma',
+]
+
+export function isSafeSql(sql: string): boolean {
+	const normalized = sql.trim().toLowerCase()
+	if (!normalized.startsWith('select')) return false
+	if (normalized.includes(';')) return false
+	return !FORBIDDEN_SQL.some(keyword => normalized.includes(keyword))
+}
+
+export async function generateSql(question: string, context: string[]): Promise<string> {
+	const contextBlock = context.length ? context.join('\n---\n') : 'No additional context'
+
+	const messages: LLMMessage[] = [
+		{
+			role: 'system',
+			content:
+				'You translate natural language into safe SQLite SELECT queries. Use only tables movies and ratings. Join on movies.movieId = ratings.movieId when combining data. Return concise, single-statement SELECT queries only.',
+		},
+		{
+			role: 'user',
+			content: `Generate a single SQLite SELECT statement for this question. Use context when helpful.
+Question: ${question}
+Context:
+${contextBlock}
+Return JSON: {"sql": "..."}`,
+		},
+	]
+
+	const response = await chatJson<{ sql: string }>(messages, {
+		schemaDescription: '{"sql": string}',
+		maxTokens: 200,
+	})
+
+	const sql = (response.parsed?.sql ?? '').trim()
+	if (!sql) throw new Error('LLM did not return SQL')
+	if (!isSafeSql(sql)) throw new Error('Generated SQL failed safety checks')
+	return sql
+}
+
 
 // TODO : Add personalized movie recommendations, user preference summaries, & comparative analyses
 // TODO : Demonstrate prompting techniques to generate specific structured outputs (e.g., provide 5-10 example ratings or movie details for prediction tasks). Test with varied inputs 

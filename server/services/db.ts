@@ -29,6 +29,14 @@ const ratingsDbPath = path.resolve(process.cwd(), 'db/ratings.db')
 
 const moviesDb = new Database(moviesDbPath, { readonly: true })
 const ratingsDb = new Database(ratingsDbPath, { readonly: true })
+const combinedDb = new Database(':memory:')
+
+combinedDb.exec(
+	`ATTACH DATABASE '${moviesDbPath}' AS moviesdb;
+ATTACH DATABASE '${ratingsDbPath}' AS ratingsdb;
+CREATE TABLE movies AS SELECT * FROM moviesdb.movies;
+CREATE TABLE ratings AS SELECT * FROM ratingsdb.ratings;`,
+)
 
 function mapMovie(row: any): Movie {
 	return {
@@ -99,5 +107,46 @@ export const db = {
 			avgRating: row.avgRating,
 			count: row.count,
 		}))
+	},
+
+	runSelect(sql: string): any[] {
+		const stmt = combinedDb.prepare(sql)
+		return stmt.all()
+	},
+
+	getDbStats(): {
+		moviesCount: number
+		ratingsCount: number
+		moviesFileSize: number
+		ratingsFileSize: number
+		totalFileSize: number
+		avgRatingsPerMovie: number
+	} {
+		const fs = require('node:fs')
+
+		// Get row counts
+		const moviesCount = (
+			moviesDb.prepare('SELECT COUNT(*) as count FROM movies').get() as { count: number }
+		).count
+		const ratingsCount = (
+			ratingsDb.prepare('SELECT COUNT(*) as count FROM ratings').get() as { count: number }
+		).count
+
+		// Get file sizes
+		const moviesFileSize = fs.statSync(moviesDbPath).size
+		const ratingsFileSize = fs.statSync(ratingsDbPath).size
+		const totalFileSize = moviesFileSize + ratingsFileSize
+
+		// Calculate average
+		const avgRatingsPerMovie = moviesCount > 0 ? ratingsCount / moviesCount : 0
+
+		return {
+			moviesCount,
+			ratingsCount,
+			moviesFileSize,
+			ratingsFileSize,
+			totalFileSize,
+			avgRatingsPerMovie,
+		}
 	},
 }

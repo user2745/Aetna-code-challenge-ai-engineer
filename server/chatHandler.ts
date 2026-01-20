@@ -1,59 +1,56 @@
-import express from 'express'
-import { chat } from './services/llm'
-import type { ChatRequest, ChatResponse, ChatMessage } from './types'
+import { Router } from 'express'
+import type { Request, Response } from 'express'
+import { appendMessage, buildContext } from './services/conversation.js'
+import { chat, generateSql } from './services/llm.js'
+import { db } from './services/db.js'
 
-const router = express.Router()
-
-const systemPrompt =
-	process.env.SYSTEM_PROMPT ??
-	'You are a concise, helpful assistant for Aetna teammates. Provide clear, actionable answers.'
-
-const newId = () =>
-	typeof crypto !== 'undefined' && crypto.randomUUID
-		? crypto.randomUUID()
-		: Math.random().toString(36).slice(2)
-
-router.post('/chat', async (req, res) => {
-	const body = req.body as ChatRequest
-
-	if (!body?.message || !body.message.trim()) {
-		res.status(400).json({ error: 'message is required' })
-		return
-	}
-
-	const conversationId = body.conversationId ?? `conv-${Date.now()}`
-
+export async function chatHandler(req: Request, res: Response) {
 	try {
-		const llmResponse = await chat(
-			[
-				{
-					role: 'user',
-					content: body.message,
-				},
-			],
-			{
-				systemPrompt,
+		const message = req.body?.message
+		if (typeof message !== 'string' || !message.trim()) {
+			res.status(400).json({ error: 'message is required' })
+			return
+		}
+
+		appendMessage((req as any).session, { role: 'user', content: message })
+
+		const context = buildContext((req as any).session, 12)
+		const llmMessages = context.map(m => ({ role: m.role, content: m.content }))
+
+		let sql = ''
+		let rows: any[] | null = null
+		try {
+			const vectorStore = req.app.locals.vectorStore
+			if (vectorStore) {
+				const vectorContext = await vectorStore.search(message, 5)
+				sql = await generateSql(message, vectorContext)
+				rows = db.runSelect(sql)
 			}
-		)
-
-		const message: ChatMessage = {
-			id: newId(),
-			role: 'assistant',
-			content: llmResponse.content,
-			status: 'complete',
+		} catch (error) {
+			console.warn('SQL generation or execution failed, falling back to chat only:', error)
 		}
 
-		const payload: ChatResponse = {
-			message,
-			conversationId,
-		}
+		const dataBlock = rows ? JSON.stringify(rows).slice(0, 4000) : null
+		const userTurn = dataBlock
+			? `User question: ${message}\nGrounding data (SQL: ${sql || 'n/a'}):\n${dataBlock}`
+			: message
 
-		res.json(payload)
-	} catch (error) {
-		const detail = error instanceof Error ? error.message : 'Unknown error'
-		console.error('chat handler error', detail)
-		res.status(500).json({ error: detail })
+		const response = await chat([...llmMessages, { role: 'user', content: userTurn }], {
+			systemPrompt:
+				'You are a helpful movie assistant. Use provided data when available. If data is present, ground your answer in it and avoid speculation. Be concise and actionable.',
+			temperature: 0.3,
+			maxTokens: 400,
+		})
+
+		const reply = response.content
+		appendMessage((req as any).session, { role: 'assistant', content: reply })
+
+		res.json({ reply })
+	} catch (_error) {
+		res.status(500).json({ error: 'Internal Server Error' })
 	}
-})
+}
 
+const router = Router()
+router.post('/chat', chatHandler)
 export default router
